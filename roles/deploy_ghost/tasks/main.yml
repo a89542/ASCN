@@ -190,7 +190,7 @@
 
 - name: "wait about 5 to pod to be ready"
   ansible.builtin.pause:
-    seconds: 10
+    seconds: 25
 
 - name: "Check All"
   shell: kubectl get all
