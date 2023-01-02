@@ -1,0 +1,216 @@
+---
+#- name: Connect to the cluster (update kubeconfig)"
+#  shell: gcloud container clusters get-credentials  --project="{{ gcp_project}}"  --zone="{{ gcp_zone }}"  ascn-cluster
+
+- name: "MySql pv deployment"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: PersistentVolume
+      metadata:
+        name: mysql-pv-volume
+        namespace: default
+        labels:
+          type: local
+      spec:
+        storageClassName: manual
+        capacity:
+          storage: 20Gi
+        accessModes:
+          - ReadWriteOnce
+        hostPath:
+          path: "/var/lib/data"
+
+- name: "MySql pv-claim deployment"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: mysql-pv-claim
+        namespace: default
+      spec:
+        storageClassName: manual
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 20Gi
+
+- name: "MySql deployment"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: mysql-deployment
+        namespace: default
+        labels:
+          app: mysql
+          tier: database
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: mysql
+        template:
+          metadata:
+            labels:
+              app: mysql
+              tier: database
+          spec:
+            containers:
+            - name: mysql
+              image: mysql:latest
+              ports:
+              - containerPort: 3306
+                name: mysql
+              env:
+              - name: MYSQL_ALLOW_EMPTY_PASSWORD
+                value: "true"
+              - name: MYSQL_USER
+                value: "ghost_user"
+              - name: MYSQL_PASSWORD
+                value: "ghost_password"
+              - name: MYSQL_DATABASE
+                value: "ghost_database"
+              volumeMounts:
+              - name: mysql-persistent-storage
+                mountPath: /var/lib/mysql
+            volumes:
+            - name: mysql-persistent-storage
+              persistentVolumeClaim:
+                claimName: mysql-pv-claim
+
+- name: "MySql Service deployment"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: mysql-service
+        namespace: default
+        labels:
+          app: mysql
+          tier: database
+      spec:
+        selector:
+          app: mysql
+        ports:
+        - port: 3306
+          targetPort: 3306
+
+- name: "Ghost Service deployment"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: ghost-service
+        namespace: default
+        labels:
+          app: ghost
+      spec:
+        type: LoadBalancer
+        selector:
+          app: ghost
+        ports:
+          - port: 80
+            targetPort: 2368
+
+#- name: "Wait for pod to be ready"
+#  shell: kubectl wait --for=condition=ready pod -l app=ghost 
+
+#- name: "Wait for external ip"
+#  shell: kubectl get service -w load-balancer -o 'go-template={{with .status.loadBalancer.ingress}}{{range .}}{{.ip}}{{"\n"}}{{end}}{{.err}}{{end}}' 2>/dev/null | head -n1
+
+- name: "wait about 45 seconds to external ip to be ready"
+  ansible.builtin.pause:
+    seconds: 45
+
+- name: "Check Ghost Service"
+  shell: kubectl describe services ghost-service
+  register: result2
+
+- name: "set external ip"
+  set_fact:
+     ghost_ip: "{{ result2.stdout | regex_search(regexp,'\\1') | first }}"
+  vars:
+    regexp: 'Ingress:\s*((\d+.){3}\d+)'
+
+- debug:
+    msg: "https://{{ghost_ip}}:80"
+
+- name: "Ghost deployment"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+          name: ghost-deployment
+          namespace: default
+          labels:
+              app: ghost
+      spec:
+        replicas: 1
+        selector:
+            matchLabels:
+                app: ghost
+        template:
+          metadata:
+            labels:
+                app: ghost
+          spec:
+            containers:
+            - name: ghost
+              image: ghost:5.14.1
+              ports:
+                - containerPort: 2368
+              env:
+                - name: database__client
+                  value: mysql
+                - name: database__connection__host
+                  value: mysql-service
+ #               - name: database__connection__port
+ #                 value: "3306"
+                - name: database__connection__user
+                  value: "ghost_user"
+                - name: database__connection__password
+                  value: "ghost_password"
+                - name: database__connection__database
+                  value: ghost_database
+                - name: url
+                  value: http://{{ghost_ip}}
+
+- name: "wait about 5 to pod to be ready"
+  ansible.builtin.pause:
+    seconds: 10
+
+- name: "Check All"
+  shell: kubectl get all
+  register: result
+
+- debug:
+    var: result
+
+- name: "set name of mysql pod"
+  set_fact:
+    mysql_pod: "{{result.stdout | regex_search(regexp,'\\1') | first}}"
+  vars:
+    regexp: '(mysql-deployment-([\w-])+)'
+
+- debug:
+    msg: "idPod={{mysql_pod}}"
+
+
+- name: "create mail"
+  shell: kubectl exec -it {{mysql_pod}} -- mysql -u ghost_user --password=ghost_password ghost_database -e "update users set name='ascn', password='\$2b\$10\$KfnjJ4ovp72zYBkqRD9kyuVXeHpeXwI4sF/oYEdxt3AGXQVVsOi5a' , email='ascn@example.com' , status='active' where id=1"
+
+- name: "autoScale ghost"
+  shell: kubectl autoscale deployment ghost-deployment --min 1 --max 10 --cpu-percent 65

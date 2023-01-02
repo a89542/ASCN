@@ -1,0 +1,25 @@
+---
+#- name: Connect to the cluster (update kubeconfig)"
+#  shell: gcloud container clusters get-credentials  --project="{{ gcp_project}}"  --zone="{{ gcp_zone }}"  ascn-cluster
+
+- name: "Delete ghost service"
+  shell: kubectl delete service --ignore-not-found=true ghost-service
+
+- name: "Delete ghost pod e deployment"
+  shell: kubectl delete deployment --ignore-not-found=true ghost-deployment
+
+- name: "Delete database service"
+  shell: kubectl delete service --ignore-not-found=true mysql-service
+  when: delete_data is defined
+
+- name: "Delete database pod e deployment"
+  shell: kubectl delete deployment --ignore-not-found=true mysql-deployment
+  when: delete_data is defined
+
+- name: "Check All"
+  shell: kubectl get all
+  register: result
+
+- debug:
+    var: result
+

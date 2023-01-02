@@ -1,3 +1,15 @@
 ---
-# Playbook to deploy Ghost and its components
-# TO DO
+# Playbook to deploy ghost
+
+#- name: "Debbug de IPs"
+#  hosts: localhost
+#  connection: local
+#  tasks:
+#    - debug: var=ansible_all_ipv4_addresses
+#    - debug: var=ansible_default_ipv4.address
+
+- name: deploy ghost
+  hosts: localhost
+  gather_facts: false
+  roles:
+      - deploy_ghost
